@@ -113,8 +113,6 @@ typedef struct {
 
     ngx_mp4_stsc_entry_t  stsc_start_chunk_entry;
     ngx_mp4_stsc_entry_t  stsc_end_chunk_entry;
-
-    uint8_t               video;
 } ngx_http_mp4_trak_t;
 
 
@@ -1802,11 +1800,6 @@ ngx_http_mp4_read_hdlr_atom(ngx_http_mp4_file_t *mp4, uint64_t atom_data_size)
     atom->pos = atom_header;
     atom->last = atom_header + atom_size;
 
-    u_char *p = atom->pos;
-    fprintf(stderr, "xxx HDLR %c%c%c%c\n", p[16], p[17], p[18], p[19]); // 'hdlr'
-    // 'vide' or 'soun'
-    trak->video = (p[16] == 'v' && p[17] == 'i' && p[18] == 'd'&& p[19] == 'e' ? 1 : 0);
-
     trak->hdlr_size = atom_size;
     trak->out[NGX_HTTP_MP4_HDLR_ATOM].buf = atom;
 
@@ -2065,8 +2058,10 @@ typedef struct {
 
 static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *trak, ngx_mp4_exact_t *exact) {
     // PARSE STTS -- time-to-sample atom
-    ngx_str_t value;
-    ngx_buf_t *stts_data;
+    ngx_str_t             value;
+    u_char               *p;
+    ngx_buf_t            *stts_data;
+    ngx_buf_t            *atom;
     ngx_mp4_stts_entry_t *stts_entry, *stts_end;
     uint32_t count, duration, j, sample_num; // they start at one <shrug>
     uint64_t sample_time;
@@ -2081,6 +2076,18 @@ static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t
      if (!(ngx_http_arg(mp4->request, (u_char *) "exact", 5, &value) == NGX_OK)) {
         return;
     }
+
+
+    // check HDLR atom to see if this trak is video or audio
+    atom = trak->out[NGX_HTTP_MP4_HDLR_ATOM].buf;
+    p = atom->pos;
+    fprintf(stderr, "xxx HDLR %c%c%c%c\n", p[16], p[17], p[18], p[19]); // 'hdlr'
+    // 'vide' or 'soun'
+    if (!(p[16] == 'v' && p[17] == 'i' && p[18] == 'd'&& p[19] == 'e')) {
+        return;
+    }
+
+
 
     stts_data = trak->out[NGX_HTTP_MP4_STTS_DATA].buf;
     stts_entry = (ngx_mp4_stts_entry_t *) stts_data->pos;
@@ -2276,10 +2283,9 @@ ngx_http_mp4_crop_stts_data(ngx_http_mp4_file_t *mp4,
 
     if (start) {
         start_sec = mp4->start;
-        if (trak->video) {
-            exact_video_adjustment(mp4, trak, &exact);
-            start_sec -= exact.speedup_seconds;
-        }
+
+        exact_video_adjustment(mp4, trak, &exact);
+        start_sec -= exact.speedup_seconds;
 
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
                        "mp4 stts crop start_time:%ui", start_sec);
@@ -2344,7 +2350,7 @@ found:
     if (start) {
         ngx_mp4_set_32value(entry->count, count - rest);
 
-        if (trak->video && exact.speedup_samples) {
+        if (exact.speedup_samples) {
             // We're going to prepend an entry with duration=1 for the frames we want to "not see".
             // MOST of the time, we're taking a single element entry array and making it two.
             int32_t current_count = ngx_mp4_get_32value(entry->count);
