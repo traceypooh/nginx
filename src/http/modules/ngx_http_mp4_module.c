@@ -2153,8 +2153,6 @@ static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t
 
     mp4->speedup_seconds = mp4->start - start_new;
     mp4->start = start_new;
-    mp4->length += mp4->speedup_seconds;
-    // xxx rewrite durations: MVHD TKHD MDHD
 }
 
 
