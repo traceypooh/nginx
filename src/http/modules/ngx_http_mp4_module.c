@@ -2059,7 +2059,6 @@ typedef struct {
 static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *trak, ngx_mp4_exact_t *exact) {
     // PARSE STTS -- time-to-sample atom
     ngx_str_t             value;
-    u_char               *p;
     ngx_buf_t            *stts_data;
     ngx_buf_t            *atom;
     ngx_mp4_stts_entry_t *stts_entry, *stts_end;
@@ -2080,10 +2079,11 @@ static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t
 
     // check HDLR atom to see if this trak is video or audio
     atom = trak->out[NGX_HTTP_MP4_HDLR_ATOM].buf;
-    p = atom->pos;
-    fprintf(stderr, "xxx HDLR %c%c%c%c\n", p[16], p[17], p[18], p[19]); // 'hdlr'
     // 'vide' or 'soun'
-    if (!(p[16] == 'v' && p[17] == 'i' && p[18] == 'd'&& p[19] == 'e')) {
+    if (!(atom->pos[16] == 'v' &&
+          atom->pos[17] == 'i' &&
+          atom->pos[18] == 'd' &&
+          atom->pos[19] == 'e')) {
         return;
     }
 
@@ -2376,11 +2376,9 @@ found:
             ngx_mp4_set_32value(entry->duration, 1);
             fprintf(stderr, "   new[0]: count:%d duration:1\n", ngx_mp4_get_32value(entry->count));
 
-            data->last = (u_char *) (entry + 2); // chexxx
+            data->last = (u_char *) (entry + 2);
 
             entries++;
-
-            // xxx change???  trak->out[NGX_HTTP_MP4_STTS_DATA].buf;
         }
 
         data->pos = (u_char *) entry;
