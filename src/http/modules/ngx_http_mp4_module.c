@@ -2056,8 +2056,10 @@ typedef struct {
     ngx_uint_t            speedup_seconds;
 } ngx_mp4_exact_t;
 
-static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *trak, ngx_mp4_exact_t *exact) {
-    // PARSE STTS -- time-to-sample atom
+static void
+exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *trak, ngx_mp4_exact_t *exact)
+{
+    // will parse STTS -- time-to-sample atom
     ngx_str_t             value;
     ngx_buf_t            *stts_data;
     ngx_buf_t            *atom;
