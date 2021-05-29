@@ -2063,15 +2063,20 @@ static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t
     ngx_buf_t            *atom;
     ngx_mp4_stts_entry_t *stts_entry, *stts_end;
     uint32_t              count, duration, j, n, sample_keyframe, sample_num;
-    uint64_t              sample_time, start_new;
+    uint64_t              sample_time, seconds, start_seconds_closest_keyframe;
     uint8_t               is_keyframe;
-    double                seconds, start_seconds_closest_keyframe, start_seconds_wanted;
 
     exact->speedup_samples = 0;
     exact->speedup_seconds = 0;
 
     // if '&exact=1' CGI arg isn't present, do nothing
     if (!(ngx_http_arg(mp4->request, (u_char *) "exact", 5, &value) == NGX_OK)) {
+        return;
+    }
+
+    if (!trak->sync_samples_entries) {
+        // Highly unlikely video STSS got parsed and _every_ sample is a keyframe.
+        // However, if the case, we don't need to adjust the video at all.
         return;
     }
 
@@ -2085,21 +2090,14 @@ static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t
         return; // do nothing if not video
     }
 
-    start_seconds_closest_keyframe = 0;
-    start_seconds_wanted = (double)mp4->start / mp4->timescale; // xxx not sure why this divisor works :(
 
     stts_data = trak->out[NGX_HTTP_MP4_STTS_DATA].buf;
     stts_entry = (ngx_mp4_stts_entry_t *) stts_data->pos;
     stts_end   = (ngx_mp4_stts_entry_t *) stts_data->last;
 
-    if (!trak->sync_samples_entries) {
-        // Highly unlikely video STSS got parsed and _every_ sample is a keyframe.
-        // However, if the case, we don't need to adjust the video at all.
-        return;
-    }
-
     sample_num = 0; // they start at one <shrug>
     sample_time = 0;
+    start_seconds_closest_keyframe = 0;
     while (stts_entry < stts_end) {
         // STTS === time-to-sample atom
         //    each entry is 4B and [sample count][sample duration]  (since durations can vary)
@@ -2123,11 +2121,12 @@ static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t
                 }
             }
 
-            seconds = ((double)sample_time / trak->timescale);
+            seconds = sample_time * 1000 / trak->timescale;
             sample_time += duration;
 
-            if (seconds > start_seconds_wanted)
+            if (seconds > mp4->start) {
                 goto found;
+            }
 
             if (is_keyframe) {
                 start_seconds_closest_keyframe = seconds;
@@ -2144,14 +2143,13 @@ static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t
 
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
                    "exact_video_adjustment() new keyframe start: %d, speedup first %d samples",
-                   (uint64_t)start_seconds_closest_keyframe * 1000,
+                   start_seconds_closest_keyframe,
                    exact->speedup_samples);
 
-    // NOTE: start 1 start position after keyframe to ensure first video frame emitted is always
+    // NOTE: begin 1 start position before keyframe to ensure first video frame emitted is always
     // a keyframe
-    start_new = (uint64_t)(start_seconds_closest_keyframe * 1000) +
-                          (start_seconds_closest_keyframe ? 1 : 0);
-    exact->speedup_seconds = mp4->start - start_new;
+    exact->speedup_seconds = mp4->start - start_seconds_closest_keyframe
+                             - (start_seconds_closest_keyframe ? 1 : 0);
 }
 
 
