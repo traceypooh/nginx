@@ -116,6 +116,7 @@ typedef struct {
 
     uint8_t               video;
     int32_t               speedup_samples;
+    ngx_uint_t            speedup_seconds;
 } ngx_http_mp4_trak_t;
 
 
@@ -158,7 +159,6 @@ typedef struct {
     u_char                mdat_atom_header[16];
 
     uint8_t               exact;
-    ngx_uint_t            speedup_seconds;
 } ngx_http_mp4_file_t;
 
 
@@ -594,7 +594,6 @@ ngx_http_mp4_handler(ngx_http_request_t *r)
         mp4->start = (ngx_uint_t) start;
         mp4->length = length;
         mp4->exact = exact;
-        mp4->speedup_seconds = 0;
         mp4->request = r;
 
         switch (ngx_http_mp4_process(mp4)) {
@@ -2084,16 +2083,21 @@ static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t
     stts_entry = (ngx_mp4_stts_entry_t *) stts_data->pos;
     stts_end   = (ngx_mp4_stts_entry_t *) stts_data->last;
 
-    if (!mp4->exact || !trak->video || !trak->sync_samples_entries) {
+    if (!mp4->exact || !trak->video) {
         // Wait until video STSS is parsed (and we get re-called).
-        // Highly unlikely video STSS got parsed and _every_ sample is a keyframe.
-        // However, if the case, we don't need to adjust the video at all and nothing to do.
         return;
     }
 
     fprintf(stderr, "xxx exact_video_adjustment() called\n");
 
+    trak->speedup_seconds = 0;
     trak->speedup_samples = 0;
+
+    if (!trak->sync_samples_entries) {
+        // Highly unlikely video STSS got parsed and _every_ sample is a keyframe.
+        // However, if the case, we don't need to adjust the video at all and nothing to do.
+        return;
+    }
 
     sample_num = 0;
     sample_time = 0;
@@ -2151,8 +2155,7 @@ static void exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t
     fprintf(stderr, "xxx fast forward first %d samples\n", trak->speedup_samples);
     uint64_t start_new = (uint64_t)(start_seconds_closest_keyframe * 1000) + 1; // xxx +1
 
-    mp4->speedup_seconds = mp4->start - start_new;
-    mp4->start = start_new;
+    trak->speedup_seconds = mp4->start - start_new;
 }
 
 
@@ -2279,9 +2282,9 @@ ngx_http_mp4_crop_stts_data(ngx_http_mp4_file_t *mp4,
 
     if (start) {
         start_sec = mp4->start;
-        if (mp4->exact && !trak->video) {
+        if (mp4->exact && trak->video) {
             // NOTE: start_sec = [real seconds] * 1000
-            start_sec += mp4->speedup_seconds; // xxx <<MAGIC>> -- docme!!
+            start_sec -= trak->speedup_seconds;
         }
 
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
@@ -2347,7 +2350,7 @@ found:
     if (start) {
         ngx_mp4_set_32value(entry->count, count - rest);
 
-        if (trak->video && trak->speedup_samples) {
+        if (mp4->exact && trak->video && trak->speedup_samples) {
             // We're going to prepend an entry with duration=1 for the frames we want to "not see".
             // MOST of the time, we're taking a single element entry array and making it two.
             int32_t current_count = ngx_mp4_get_32value(entry->count);
