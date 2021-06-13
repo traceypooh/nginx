@@ -2045,109 +2045,6 @@ typedef struct {
     u_char    duration[4];
 } ngx_mp4_stts_entry_t;
 
-typedef struct {
-    uint32_t              speedup_samples;
-    ngx_uint_t            speedup_seconds;
-} ngx_mp4_exact_t;
-
-static void
-exact_video_adjustment(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *trak, ngx_mp4_exact_t *exact)
-{
-    // will parse STTS -- time-to-sample atom
-    ngx_str_t             value;
-    ngx_buf_t            *stts_data;
-    ngx_buf_t            *atom;
-    ngx_mp4_stts_entry_t *stts_entry, *stts_end;
-    uint32_t              count, duration, j, n, sample_keyframe, sample_num;
-    uint64_t              sample_time, seconds, start_seconds_closest_keyframe;
-    uint8_t               is_keyframe;
-
-    exact->speedup_samples = 0;
-    exact->speedup_seconds = 0;
-
-    // if '&exact=1' CGI arg isn't present, do nothing
-    if (!(ngx_http_arg(mp4->request, (u_char *) "exact", 5, &value) == NGX_OK)) {
-        return;
-    }
-
-    if (!trak->sync_samples_entries) {
-        // Highly unlikely video STSS got parsed and _every_ sample is a keyframe.
-        // However, if the case, we don't need to adjust the video at all.
-        return;
-    }
-
-    // check HDLR atom to see if this trak is video or audio
-    atom = trak->out[NGX_HTTP_MP4_HDLR_ATOM].buf;
-    // 'vide' or 'soun'
-    if (!(atom->pos[16] == 'v' &&
-          atom->pos[17] == 'i' &&
-          atom->pos[18] == 'd' &&
-          atom->pos[19] == 'e')) {
-        return; // do nothing if not video
-    }
-
-
-    stts_data = trak->out[NGX_HTTP_MP4_STTS_DATA].buf;
-    stts_entry = (ngx_mp4_stts_entry_t *) stts_data->pos;
-    stts_end   = (ngx_mp4_stts_entry_t *) stts_data->last;
-
-    sample_num = 0; // they start at one <shrug>
-    sample_time = 0;
-    start_seconds_closest_keyframe = 0;
-    while (stts_entry < stts_end) {
-        // STTS === time-to-sample atom
-        //    each entry is 4B and [sample count][sample duration]  (since durations can vary)
-        count = ngx_mp4_get_32value(stts_entry->count);
-        duration = ngx_mp4_get_32value(stts_entry->duration);
-
-        for (j = 0; j < count; j++) {
-            sample_num++;
-
-            // search STSS sync sample entries to see if this sample is a keyframe
-            is_keyframe = 0;
-            for (n = 0; n < trak->sync_samples_entries; n++) {
-                // each one of this these are a video sample number keyframe
-                sample_keyframe = ngx_mp4_get_32value(trak->stss_data_buf.pos + (n * 4));
-                if (sample_keyframe == sample_num) {
-                    is_keyframe = 1;
-                    break;
-                }
-                if (sample_keyframe > sample_num) {
-                    break;
-                }
-            }
-
-            seconds = sample_time * 1000 / trak->timescale;
-            sample_time += duration;
-
-            if (seconds > mp4->start) {
-                goto found;
-            }
-
-            if (is_keyframe) {
-                start_seconds_closest_keyframe = seconds;
-                exact->speedup_samples = 0;
-            } else {
-                exact->speedup_samples++;
-            }
-        }
-
-        stts_entry++;
-    }
-
-    found:
-
-    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
-                   "exact_video_adjustment() new keyframe start: %d, speedup first %d samples",
-                   start_seconds_closest_keyframe,
-                   exact->speedup_samples);
-
-    // NOTE: begin 1 start position before keyframe to ensure first video frame emitted is always
-    // a keyframe
-    exact->speedup_seconds = mp4->start - start_seconds_closest_keyframe
-                             - (start_seconds_closest_keyframe ? 1 : 0);
-}
-
 
 static ngx_int_t
 ngx_http_mp4_read_stts_atom(ngx_http_mp4_file_t *mp4, uint64_t atom_data_size)
@@ -2267,13 +2164,9 @@ ngx_http_mp4_crop_stts_data(ngx_http_mp4_file_t *mp4,
     ngx_buf_t             *data;
     ngx_uint_t             start_sample, entries, start_sec;
     ngx_mp4_stts_entry_t  *entry, *end;
-    ngx_mp4_exact_t        exact;
 
     if (start) {
         start_sec = mp4->start;
-
-        exact_video_adjustment(mp4, trak, &exact);
-        start_sec -= exact.speedup_seconds;
 
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
                        "mp4 stts crop start_time:%ui", start_sec);
@@ -2296,6 +2189,8 @@ ngx_http_mp4_crop_stts_data(ngx_http_mp4_file_t *mp4,
     start_sample = 0;
     entry = (ngx_mp4_stts_entry_t *) data->pos;
     end = (ngx_mp4_stts_entry_t *) data->last;
+fprintf(stderr, "xxx this betta be 1: %ld\n", end - entry);
+fprintf(stderr, "xxx this betta be 1: %ld\n", entries);
 
     while (entry < end) {
         count = ngx_mp4_get_32value(entry->count);
@@ -2337,10 +2232,43 @@ found:
 
     if (start) {
         ngx_mp4_set_32value(entry->count, count - rest);
+        data->pos = (u_char *) entry;
+        trak->time_to_sample_entries = entries;
+        trak->start_sample = start_sample;
 
-        if (exact.speedup_samples) {
+        ngx_log_debug2(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
+                       "start_sample:%ui, new count:%uD",
+                       trak->start_sample, count - rest);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+        // xxx only do this if nginx mp4 config exact setting is set
+        fprintf(stderr, "xxx trak start_sample %lu\n", trak->start_sample);
+        uint32_t     n, speedup_samples;
+        ngx_uint_t   sample_keyframe, start_sample_exact;
+
+        start_sample_exact = trak->start_sample;
+        for (n = 0; n < trak->sync_samples_entries; n++) {
+            // each element of array is the sample number of a keyframe
+            sample_keyframe = ngx_mp4_get_32value(trak->stss_data_buf.pos + (n * 4));
+            if (sample_keyframe <= trak->start_sample) {
+                start_sample_exact = sample_keyframe;
+            }
+            if (sample_keyframe >= trak->start_sample) {
+                break;
+            }
+        }
+
+        if (start_sample_exact < trak->start_sample) {
             // We're going to prepend an entry with duration=1 for the frames we want to "not see".
-            // MOST of the time, we're taking a single element entry array and making it two.
+            // MOST of the time (eg: constant video framerate),
+            // we're taking a single element entry array and making it two.
+            speedup_samples = trak->start_sample - start_sample_exact;
+
+ngx_mp4_set_32value(entry->count, (count - rest) + speedup_samples); // xxxxxxxx
+
+            fprintf(stderr, "xxx new trak start_sample %lu -- speeding up %u samples\n",
+                    start_sample_exact, speedup_samples);
+
             uint32_t current_count = ngx_mp4_get_32value(entry->count);
             ngx_mp4_stts_entry_t* entries_array = ngx_palloc(mp4->request->pool,
                 (1 + entries) * sizeof(ngx_mp4_stts_entry_t));
@@ -2352,35 +2280,43 @@ found:
             ngx_log_debug1(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
                            "exact split in 2 video STTS entry from count:%d", current_count);
 
-            if (current_count <= exact.speedup_samples)
+            if (current_count <= speedup_samples) {
                 return NGX_ERROR;
+            }
 
             entry = &(entries_array[1]);
-            ngx_mp4_set_32value(entry->count, current_count - exact.speedup_samples);
+            ngx_mp4_set_32value(entry->count, current_count - speedup_samples);
             ngx_log_debug2(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
                            "exact split new[1]: count:%d duration:%d",
                            ngx_mp4_get_32value(entry->count),
                            ngx_mp4_get_32value(entry->duration));
             entry--;
-            ngx_mp4_set_32value(entry->count, exact.speedup_samples);
+            ngx_mp4_set_32value(entry->count, speedup_samples);
             ngx_mp4_set_32value(entry->duration, 1);
             ngx_log_debug1(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
                            "exact split new[0]: count:%d duration:1",
                            ngx_mp4_get_32value(entry->count));
 
-            data->last = (u_char *) (entry + 2);
+            fprintf(stderr, "xxx mp4 start:%lu, track time-to-sample entries:%u\n",
+                    mp4->start, trak->time_to_sample_entries);
 
-            entries++;
+            fprintf(stderr, "xxx trak->start_sample: %lu => %lu\n",
+                    trak->start_sample, start_sample_exact);
+
+            data->pos = (u_char *) entry;
+            trak->time_to_sample_entries++;
+            trak->start_sample = start_sample_exact; // xxxxxx
+            data->last = (u_char *) (entry + trak->time_to_sample_entries);
+
+            // NOTE: begin 1 start position before keyframe to ensure first video frame
+            // emitted is always a keyframe
+            // mp4->start -= ((speedup_samples * 1) + 1); // xxx and xxx on the -1
+            // mp4->start -= ((speedup_samples * 1001) + 1); // xxx 1001 and xxx on the -1
+
+            fprintf(stderr, "xxx mp4 start:%lu, track time-to-sample entries:%u\n",
+                    mp4->start, trak->time_to_sample_entries);
         }
-
-        data->pos = (u_char *) entry;
-        trak->time_to_sample_entries = entries;
-        trak->start_sample = start_sample;
-
-        ngx_log_debug2(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
-                       "start_sample:%ui, new count:%uD",
-                       trak->start_sample, count - rest);
-
+////////////////////////////////////////////////////////////////////////////////////////////////////
     } else {
         ngx_mp4_set_32value(entry->count, rest);
         data->last = (u_char *) (entry + 1);
