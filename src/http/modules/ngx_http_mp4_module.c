@@ -43,6 +43,7 @@
 typedef struct {
     size_t                buffer_size;
     size_t                max_buffer_size;
+    ngx_flag_t            exact_start;
 } ngx_http_mp4_conf_t;
 
 
@@ -338,6 +339,13 @@ static ngx_command_t  ngx_http_mp4_commands[] = {
       ngx_conf_set_size_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_mp4_conf_t, max_buffer_size),
+      NULL },
+
+    { ngx_string("mp4_exact_start"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_mp4_conf_t, exact_start),
       NULL },
 
       ngx_null_command
@@ -2158,7 +2166,6 @@ ngx_http_mp4_update_stts_atom(ngx_http_mp4_file_t *mp4,
 static ngx_int_t
 ngx_http_mp4_exact_video_start(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *trak)
 {
-    // xxx only do this if nginx mp4 config exact setting is set
     uint32_t               n, speedup_samples, current_count;
     ngx_uint_t             sample_keyframe, start_sample_exact;
     ngx_mp4_stts_entry_t  *entry, *entries_array;
@@ -2243,6 +2250,8 @@ ngx_http_mp4_crop_stts_data(ngx_http_mp4_file_t *mp4,
     ngx_buf_t             *data;
     ngx_uint_t             start_sample, entries, start_sec;
     ngx_mp4_stts_entry_t  *entry, *end;
+    ngx_http_mp4_conf_t   *conf;
+
 
     if (start) {
         start_sec = mp4->start;
@@ -2317,7 +2326,9 @@ found:
                        "start_sample:%ui, new count:%uD",
                        trak->start_sample, count - rest);
 
-        ngx_http_mp4_exact_video_start(mp4, trak);
+        conf = ngx_http_get_module_loc_conf(mp4->request, ngx_http_mp4_module);
+        if (conf->exact_start)
+            ngx_http_mp4_exact_video_start(mp4, trak);
     } else {
         ngx_mp4_set_32value(entry->count, rest);
         data->last = (u_char *) (entry + 1);
@@ -3670,6 +3681,7 @@ ngx_http_mp4_create_conf(ngx_conf_t *cf)
 
     conf->buffer_size = NGX_CONF_UNSET_SIZE;
     conf->max_buffer_size = NGX_CONF_UNSET_SIZE;
+    conf->exact_start = NGX_CONF_UNSET;
 
     return conf;
 }
