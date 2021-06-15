@@ -2164,7 +2164,7 @@ ngx_http_mp4_update_stts_atom(ngx_http_mp4_file_t *mp4,
 
 
 static ngx_int_t
-ngx_http_mp4_exact_video_start(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *trak)
+ngx_http_mp4_exact_start_video(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *trak)
 {
     uint32_t               n, speedup_samples, current_count;
     ngx_uint_t             sample_keyframe, start_sample_exact;
@@ -2199,8 +2199,8 @@ ngx_http_mp4_exact_video_start(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *tr
         speedup_samples = trak->start_sample - start_sample_exact;
 
         ngx_log_debug3(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
-                        "exact trak start_sample move %l to %l (speed up %d samples)\n",
-                        trak->start_sample, start_sample_exact, speedup_samples);
+                       "exact trak start_sample move %l to %l (speed up %d samples)\n",
+                       trak->start_sample, start_sample_exact, speedup_samples);
 
         current_count = ngx_mp4_get_32value(entry->count);
         entries_array = ngx_palloc(mp4->request->pool,
@@ -2212,7 +2212,7 @@ ngx_http_mp4_exact_video_start(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *tr
                  trak->time_to_sample_entries * sizeof(ngx_mp4_stts_entry_t));
 
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
-                        "exact split in 2 video STTS entry from count:%d", current_count);
+                       "exact split in 2 video STTS entry from count:%d", current_count);
 
         if (current_count <= speedup_samples) {
             return NGX_ERROR;
@@ -2221,15 +2221,15 @@ ngx_http_mp4_exact_video_start(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *tr
         entry = &(entries_array[1]);
         ngx_mp4_set_32value(entry->count, current_count - speedup_samples);
         ngx_log_debug2(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
-                        "exact split new[1]: count:%d duration:%d",
-                        ngx_mp4_get_32value(entry->count),
-                        ngx_mp4_get_32value(entry->duration));
+                       "exact split new[1]: count:%d duration:%d",
+                       ngx_mp4_get_32value(entry->count),
+                       ngx_mp4_get_32value(entry->duration));
         entry--;
         ngx_mp4_set_32value(entry->count, speedup_samples);
         ngx_mp4_set_32value(entry->duration, 1);
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
-                        "exact split new[0]: count:%d duration:1",
-                        ngx_mp4_get_32value(entry->count));
+                       "exact split new[0]: count:%d duration:1",
+                       ngx_mp4_get_32value(entry->count));
 
         data->pos = (u_char *) entry;
         trak->time_to_sample_entries++;
@@ -2327,8 +2327,9 @@ found:
                        trak->start_sample, count - rest);
 
         conf = ngx_http_get_module_loc_conf(mp4->request, ngx_http_mp4_module);
-        if (conf->exact_start)
-            ngx_http_mp4_exact_video_start(mp4, trak);
+        if (conf->exact_start) {
+            ngx_http_mp4_exact_start_video(mp4, trak);
+        }
     } else {
         ngx_mp4_set_32value(entry->count, rest);
         data->last = (u_char *) (entry + 1);
