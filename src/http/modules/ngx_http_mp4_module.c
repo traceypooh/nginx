@@ -2172,7 +2172,6 @@ ngx_http_mp4_exact_start_video(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *tr
     ngx_buf_t             *data;
 
     data = trak->out[NGX_HTTP_MP4_STTS_DATA].buf;
-    entry = (ngx_mp4_stts_entry_t *) data->pos;
 
     // Find the keyframe just before the desired start time - so that we can emit an mp4
     // where the first frame is a keyframe.  We'll "speed up" the first frames to 1000x
@@ -2202,16 +2201,16 @@ ngx_http_mp4_exact_start_video(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *tr
                        "exact trak start_sample move %l to %l (speed up %d samples)\n",
                        trak->start_sample, start_sample_exact, speedup_samples);
 
-        current_count = ngx_mp4_get_32value(entry->count);
         entries_array = ngx_palloc(mp4->request->pool,
             (1 + trak->time_to_sample_entries) * sizeof(ngx_mp4_stts_entry_t));
         if (entries_array == NULL) {
             return NGX_ERROR;
         }
-        entry = (ngx_mp4_stts_entry_t *)ngx_copy(&(entries_array[1]), entry,
-                                                 trak->time_to_sample_entries *
-                                                 sizeof(ngx_mp4_stts_entry_t));
+        entry = &(entries_array[1]);
+        ngx_memcpy(entry, (ngx_mp4_stts_entry_t *)data->pos,
+                   trak->time_to_sample_entries * sizeof(ngx_mp4_stts_entry_t));
 
+        current_count = ngx_mp4_get_32value(entry->count);
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
                        "exact split in 2 video STTS entry from count:%d", current_count);
 
