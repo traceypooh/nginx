@@ -2208,8 +2208,9 @@ ngx_http_mp4_exact_start_video(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *tr
         if (entries_array == NULL) {
             return NGX_ERROR;
         }
-        ngx_copy(&(entries_array[1]), entry,
-                 trak->time_to_sample_entries * sizeof(ngx_mp4_stts_entry_t));
+        entry = (ngx_mp4_stts_entry_t *)ngx_copy(&(entries_array[1]), entry,
+                                                 trak->time_to_sample_entries *
+                                                 sizeof(ngx_mp4_stts_entry_t));
 
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
                        "exact split in 2 video STTS entry from count:%d", current_count);
@@ -2218,7 +2219,6 @@ ngx_http_mp4_exact_start_video(ngx_http_mp4_file_t *mp4, ngx_http_mp4_trak_t *tr
             return NGX_ERROR;
         }
 
-        entry = &(entries_array[1]);
         ngx_mp4_set_32value(entry->count, current_count - speedup_samples);
         ngx_log_debug2(NGX_LOG_DEBUG_HTTP, mp4->file.log, 0,
                        "exact split new[1]: count:%d duration:%d",
